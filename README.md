@@ -29,6 +29,7 @@ Once inside the TUI, type `/help` for a full list, or use the following:
 
 *   `/connect [user[:password]@]host[:port]`: Connect to a Hotline server. If `user` and `password` are provided, it will attempt to log in with them. Default is `guest@chatonly.org:5500` if no arguments are provided.
 *   `/nick <nickname>`: Change your nickname. This will be used on the next connect/login or immediately if already connected.
+*   `/icon <id>`: Change your user icon. Provide a numeric ID (e.g., `128`).
 *   `/users`: Refresh and list online users.
 *   `/info <uid>`: Get information about a user by their User ID (UID).
 *   `/msg <uid> <message>`: Send a private message to a user.

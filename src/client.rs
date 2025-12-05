@@ -19,6 +19,7 @@ pub enum ClientCommand {
     SendAgreement,
     AdminAccountRead(String),
     ChangeNick(String),
+    ChangeIcon(u16),
     FetchTracker(String),
     #[allow(dead_code)]
     Quit,
@@ -398,19 +399,23 @@ pub async fn run_client(mut cmd_rx: mpsc::Receiver<ClientCommand>, event_tx: mps
                         if let Some(w) = &mut writer {
                              let _ = event_tx.try_send(ClientEvent::Debug(format!("Changing nickname to {}...", new_nick)));
                              
-                             // Note: We don't have the current user's login/icon/color state stored in run_client.
-                             // But standard HL user change just sends the fields to update?
-                             // Usually sending HTLC_HDR_USER_CHANGE requires login, icon, color, name.
-                             // Or just the changed fields?
-                             // mhxd `snd_user_change` sends: UID, ICON, COLOR, NAME.
-                             // But that's server->client.
-                             // Client->Server `HTLC_HDR_USER_CHANGE` (304) usually sends new NAME/ICON.
-                             // Let's assume sending just NAME updates name.
-                             // If server requires all, we might need to store state.
-                             // Let's try sending just name first.
-                             
                              let fields = vec![
                                  Field { id: HTLC_DATA_NAME, data: new_nick.into_bytes() },
+                             ];
+                             
+                             let tx = Transaction::new(HTLC_HDR_USER_CHANGE, next_trans_id, fields);
+                             next_trans_id += 1;
+                             let mut buf = BytesMut::new();
+                             tx.encode(&mut buf);
+                             let _ = w.write_all(&buf).await;
+                        }
+                    }
+                    Some(ClientCommand::ChangeIcon(icon_id)) => {
+                        if let Some(w) = &mut writer {
+                             let _ = event_tx.try_send(ClientEvent::Debug(format!("Changing icon to {}...", icon_id)));
+                             
+                             let fields = vec![
+                                 Field { id: HTLC_DATA_ICON, data: icon_id.to_be_bytes().to_vec() },
                              ];
                              
                              let tx = Transaction::new(HTLC_HDR_USER_CHANGE, next_trans_id, fields);

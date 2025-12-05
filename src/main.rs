@@ -213,6 +213,23 @@ impl App {
                                     self.add_message("Usage: /nick <new_nickname>".to_string());
                                 }
                             }
+                            Some(&"/icon") => {
+                                if let Some(icon_str) = parts.get(1) {
+                                    if let Ok(icon_id) = icon_str.parse::<u16>() {
+                                        if self.connected {
+                                             let _ = self.client_tx.send(ClientCommand::ChangeIcon(icon_id)).await;
+                                        } else {
+                                             self.add_message("Not connected. Icon change will be effective on login if you reconnect.".to_string());
+                                             // Note: We don't strictly store icon state for pre-login yet, relying on server default or successful login.
+                                             // But the command is mainly for live updates.
+                                        }
+                                    } else {
+                                        self.add_message("Usage: /icon <id> (ID must be a number 0-65535)".to_string());
+                                    }
+                                } else {
+                                    self.add_message("Usage: /icon <id>".to_string());
+                                }
+                            }
                             Some(&"/quit") => {
                                  self.should_quit = true;
                             }
@@ -836,7 +853,7 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
     let users: Vec<ListItem> = app
         .users
         .iter()
-        .map(|u| ListItem::new(Line::from(Span::raw(format!("[Icon:{}] {} ({})", u.icon, u.name, u.uid)))))
+        .map(|u| ListItem::new(Line::from(Span::raw(format!("{} ({}) [Icon:{}]", u.name, u.uid, u.icon)))))
         .collect();
     let users_list = List::new(users)
         .block(Block::default().borders(Borders::ALL).title("Users"));
