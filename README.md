@@ -2,6 +2,8 @@
 
 A Rust-based Text User Interface (TUI) client for the Hotline protocol. It's mainly been tested with Hotline 1.2.3 and mhxd.
 
+![Demo](rhx.gif)
+
 ## Prerequisites
 
 You need to have Rust installed on your system.
