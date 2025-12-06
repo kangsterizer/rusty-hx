@@ -1,10 +1,11 @@
 use anyhow::Result;
 use ratatui::crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind, MouseEvent, MouseEventKind},
+    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, MouseEvent, MouseEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::crossterm::event::{EnableMouseCapture, DisableMouseCapture};
+use tui_input::{Input, backend::crossterm::EventHandler};
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
@@ -37,7 +38,7 @@ struct TrackerCache {
 }
 
 struct App {
-    input: String,
+    input: Input,
     chat_history: Vec<String>,
     users: Vec<User>,
     client_tx: mpsc::Sender<ClientCommand>,
@@ -89,7 +90,7 @@ impl App {
         };
 
         App {
-            input: String::new(),
+            input: Input::default(),
             chat_history: Vec::new(),
             users: Vec::new(),
             client_tx,
@@ -157,15 +158,16 @@ impl App {
         }
     }
 
-    async fn on_key(&mut self, key: KeyCode) {
+    async fn on_key(&mut self, key: KeyEvent) {
         match self.input_mode {
-            InputMode::Normal => match key {
+            InputMode::Normal => match key.code {
                 KeyCode::Enter => {
-                    let msg = self.input.drain(..).collect::<String>();
+                    let msg = self.input.value().to_string();
                     if !msg.trim().is_empty() {
                          self.input_history.push(msg.clone());
                          self.history_index = self.input_history.len();
                     }
+                    self.input.reset();
 
                     if msg.starts_with('/') {
                         // Commands
@@ -221,8 +223,6 @@ impl App {
                                              let _ = self.client_tx.send(ClientCommand::ChangeIcon(icon_id)).await;
                                         } else {
                                              self.add_message("Not connected. Icon change will be effective on login if you reconnect.".to_string());
-                                             // Note: We don't strictly store icon state for pre-login yet, relying on server default or successful login.
-                                             // But the command is mainly for live updates.
                                         }
                                     } else {
                                         self.add_message("Usage: /icon <id> (ID must be a number 0-65535)".to_string());
@@ -366,8 +366,8 @@ impl App {
                                  self.add_message("/news - Get the latest server news.".to_string());
                                  self.add_message("/ls - List files in the current server directory.".to_string());
                                  self.add_message("/cd <directory> - Change the current server directory.".to_string());
-                                 self.add_message("/tracker [url] - List servers from a tracker (default: hltracker.com)".to_string());
-                                 self.add_message("/admin account read <login> - Read and display user account data (requires admin privileges).".to_string());
+                                 self.add_message("/tracker [url] - List servers from a Hotline tracker.".to_string());
+                                 self.add_message("/admin account read <login> - Read and display user account data.".to_string());
                                  self.add_message("/help - Display this help message.".to_string());
                                  self.add_message("--------------------------".to_string());
                             }
@@ -387,7 +387,7 @@ impl App {
                     if self.history_index > 0 {
                         self.history_index -= 1;
                         if let Some(cmd) = self.input_history.get(self.history_index) {
-                            self.input = cmd.clone();
+                            self.input = Input::new(cmd.clone());
                         }
                     }
                 }
@@ -395,17 +395,11 @@ impl App {
                     if self.history_index < self.input_history.len() {
                         self.history_index += 1;
                         if self.history_index == self.input_history.len() {
-                            self.input.clear();
+                            self.input.reset();
                         } else if let Some(cmd) = self.input_history.get(self.history_index) {
-                            self.input = cmd.clone();
+                            self.input = Input::new(cmd.clone());
                         }
                     }
-                }
-                KeyCode::Char(c) => {
-                    self.input.push(c);
-                }
-                KeyCode::Backspace => {
-                    self.input.pop();
                 }
                 KeyCode::PageUp => {
                     let current = self.chat_scroll_state.selected().unwrap_or(0);
@@ -427,27 +421,26 @@ impl App {
                          }
                      }
                 }
-                _ => {}
+                _ => {
+                    self.input.handle_event(&Event::Key(key));
+                }
             },
-            InputMode::Password => match key {
+            InputMode::Password => match key.code {
                 KeyCode::Enter => {
-                     let pwd = self.input.drain(..).collect::<String>();
+                     let pwd = self.input.value().to_string();
+                     self.input.reset();
                      self.password = Some(pwd);
                      self.input_mode = InputMode::Normal;
                      let _ = self.client_tx.send(ClientCommand::Login(self.login.clone(), self.nickname.clone(), self.password.clone(), self.icon)).await;
                 }
-                KeyCode::Char(c) => {
-                    self.input.push(c);
-                }
-                KeyCode::Backspace => {
-                    self.input.pop();
-                }
                 KeyCode::Esc => {
-                    self.input.clear();
+                    self.input.reset();
                     self.input_mode = InputMode::Normal;
                     self.add_message("Login cancelled.".to_string());
                 }
-                _ => {}
+                _ => {
+                    self.input.handle_event(&Event::Key(key));
+                }
             }
         }
     }
@@ -609,7 +602,7 @@ async fn main_app_run(args: Vec<String>) -> Result<()> {
                         if e.to_lowercase().contains("authent") || e.to_lowercase().contains("pass") || e.contains("Access denied") { // Check for auth errors
                              app.add_message("Authentication failed. Please enter password:".to_string());
                              app.input_mode = InputMode::Password;
-                             app.input.clear();
+                             app.input.reset();
                         }
                     }
                     ClientEvent::ChatMsg(msg) => {
@@ -730,7 +723,7 @@ async fn main_app_run(args: Vec<String>) -> Result<()> {
                             if let InputMode::Password = app.input_mode {
                                 app.input_mode = InputMode::Normal;
                                 app.chat_history.push("Cancelled.".to_string());
-                                app.input.clear();
+                                app.input.reset();
                             } else {
                                 break; 
                             }
@@ -744,7 +737,7 @@ async fn main_app_run(args: Vec<String>) -> Result<()> {
                                 app.add_message("Mouse Capture Disabled (Scroll: OFF, Select: Native)".to_string());
                             }
                         } else {
-                            app.on_key(key.code).await;
+                            app.on_key(key).await;
                             if app.should_quit {
                                 break;
                             }
@@ -889,7 +882,7 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
     };
 
     let input_text = match app.input_mode {
-        InputMode::Normal => app.input.as_str(),
+        InputMode::Normal => app.input.value(),
         InputMode::Password => "", // Hide password
     };
 
@@ -897,4 +890,18 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
         .style(Style::default().fg(Color::Yellow))
         .block(Block::default().borders(Borders::ALL).title(input_title));
     f.render_widget(input, chunks[1]);
+
+    // Render cursor
+    if let InputMode::Normal = app.input_mode {
+        let inner_area = chunks[1].inner(ratatui::layout::Margin { horizontal: 1, vertical: 1 });
+        let width = inner_area.width.max(1) as usize;
+        let scroll = app.input.visual_scroll(width);
+        let cursor = app.input.visual_cursor().max(scroll) - scroll;
+        if cursor < width {
+             f.set_cursor_position(ratatui::layout::Position {
+                 x: inner_area.x + cursor as u16,
+                 y: inner_area.y
+             });
+        }
+    }
 }
