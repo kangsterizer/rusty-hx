@@ -44,6 +44,7 @@ struct App {
     // State
     server_addr: String,
     nickname: String,
+    icon: u16,
     login: String,
     password: Option<String>,
     connected: bool,
@@ -60,6 +61,7 @@ struct App {
     has_unread: bool,
     mouse_capture: bool,
     tracker_cache: Option<TrackerCache>,
+    encrypted: bool,
 }
 
 #[derive(PartialEq)]
@@ -77,11 +79,7 @@ enum InputMode {
 impl App {
     async fn new(client_tx: mpsc::Sender<ClientCommand>, initial_addr: Option<String>, initial_login_arg: Option<String>, initial_pass: Option<String>, debug: bool) -> App {
         let login = initial_login_arg.clone().unwrap_or("guest".to_string());
-        let nickname = if initial_login_arg.is_some() {
-            login.clone()
-        } else {
-            std::env::var("USER").unwrap_or("guest".to_string())
-        };
+        let nickname = std::env::var("USER").unwrap_or("guest".to_string());
         
         let server_addr = if let Some(addr) = initial_addr {
             let _ = client_tx.send(ClientCommand::Connect(addr.clone())).await;
@@ -97,6 +95,7 @@ impl App {
             client_tx,
             server_addr,
             nickname,
+            icon: 404,
             login,
             password: initial_pass,
             connected: false,
@@ -112,6 +111,7 @@ impl App {
             has_unread: false,
             mouse_capture: true,
             tracker_cache: None,
+            encrypted: false,
         }
     }
 
@@ -191,7 +191,7 @@ impl App {
                                         self.login = user.to_string();
                                         self.password = None; // Reset password if just user provided
                                     }
-                                    self.nickname = self.login.clone();
+                                    // self.nickname = self.login.clone(); // REMOVED: Keep existing nickname
                                     (Some(user.to_string()), host.to_string())
                                 } else {
                                     (None, full_str)
@@ -216,6 +216,7 @@ impl App {
                             Some(&"/icon") => {
                                 if let Some(icon_str) = parts.get(1) {
                                     if let Ok(icon_id) = icon_str.parse::<u16>() {
+                                        self.icon = icon_id;
                                         if self.connected {
                                              let _ = self.client_tx.send(ClientCommand::ChangeIcon(icon_id)).await;
                                         } else {
@@ -433,7 +434,7 @@ impl App {
                      let pwd = self.input.drain(..).collect::<String>();
                      self.password = Some(pwd);
                      self.input_mode = InputMode::Normal;
-                     let _ = self.client_tx.send(ClientCommand::Login(self.login.clone(), self.nickname.clone(), self.password.clone())).await;
+                     let _ = self.client_tx.send(ClientCommand::Login(self.login.clone(), self.nickname.clone(), self.password.clone(), self.icon)).await;
                 }
                 KeyCode::Char(c) => {
                     self.input.push(c);
@@ -587,7 +588,7 @@ async fn main_app_run(args: Vec<String>) -> Result<()> {
                         app.state = ClientState::LoggingIn;
                         app.add_message("Connected.".to_string());
                         // Auto login
-                        let _ = app.client_tx.send(ClientCommand::Login(app.login.clone(), app.nickname.clone(), app.password.clone())).await;
+                        let _ = app.client_tx.send(ClientCommand::Login(app.login.clone(), app.nickname.clone(), app.password.clone(), app.icon)).await;
                     }
                     ClientEvent::TaskSuccess(_trans_id) => {
                         if app.state == ClientState::LoggingIn {
@@ -650,12 +651,21 @@ async fn main_app_run(args: Vec<String>) -> Result<()> {
                         }
                         app.add_message("----------------------".to_string());
                     }
-                    ClientEvent::AccountInfo(info) => {
-                        app.add_message("--- Admin Account Read ---".to_string());
-                        for line in info.lines() {
-                            app.add_message(line.to_string());
+                    ClientEvent::UserAccess(info) => {
+                        if app.state == ClientState::LoggedIn { // Implicit update after login
+                            app.add_message("User Access details updated.".to_string());
+                            if app.debug {
+                                for line in info.lines() {
+                                    app.add_message(format!("[Debug] {}", line));
+                                }
+                            }
+                        } else { // Explicitly requested or other context
+                            app.add_message("--- User Access Info ---".to_string());
+                            for line in info.lines() {
+                                app.add_message(line.to_string());
+                            }
+                            app.add_message("--------------------------".to_string());
                         }
-                        app.add_message("--------------------------".to_string());
                     }
                     ClientEvent::Agreement(text) => {
                         app.add_message("--- Server Agreement ---".to_string());
@@ -663,8 +673,13 @@ async fn main_app_run(args: Vec<String>) -> Result<()> {
                             app.add_message(line.to_string());
                         }
                         app.add_message("------------------------".to_string());
-                        app.add_message("Accepting agreement...".to_string());
-                        let _ = app.client_tx.send(ClientCommand::SendAgreement).await;
+                        
+                        if app.state != ClientState::LoggedIn {
+                            app.add_message("Accepting agreement...".to_string());
+                            let _ = app.client_tx.send(ClientCommand::SendAgreement(app.nickname.clone(), app.icon)).await;
+                        } else {
+                            app.add_message("Agreement received but already logged in. Ignoring acceptance request.".to_string());
+                        }
                     }
                     ClientEvent::UserUpdate(user) => {
                         // Check if exists
@@ -696,6 +711,14 @@ async fn main_app_run(args: Vec<String>) -> Result<()> {
                         });
                         
                         app.display_tracker_servers(&servers);
+                    }
+                    ClientEvent::CipherInit(session_key) => {
+                        app.add_message("Cipher negotiation started...".to_string());
+                        let _ = app.client_tx.send(ClientCommand::EnableCipher(session_key)).await;
+                    }
+                    ClientEvent::Encrypted => {
+                        app.encrypted = true;
+                        app.add_message("🔒 Encrypted Connection Established (RC4-160/HMAC-SHA1)".to_string());
                     }
                 }
             }
@@ -839,7 +862,8 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
     
     let unread_marker = if app.has_unread { "(*)" } else { "" };
     let mouse_status = if app.mouse_capture { "[Mouse: ON]" } else { "[Mouse: OFF]" };
-    let chat_title = format!("Chat {} {} (F2 to toggle)", unread_marker, mouse_status);
+    let enc_status = if app.encrypted { "[ENC]" } else { "" };
+    let chat_title = format!("Chat {} {} {} (F2 to toggle)", unread_marker, mouse_status, enc_status);
 
     let messages_list = List::new(messages)
         .block(Block::default().borders(Borders::ALL).title(chat_title));

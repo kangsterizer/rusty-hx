@@ -27,6 +27,10 @@ pub const HTLC_DATA_DIR: u16 = 0xCA;        // 202
 pub const HTLC_DATA_CLIENTVERSION: u16 = 0xa0; // 160
 pub const HTLC_DATA_ACCESS: u16 = 0x6E;     // 110
 
+pub const HTLC_DATA_MAC_ALG: u16 = 0x0e04;
+pub const HTLS_DATA_SESSIONKEY: u16 = 0x0e03;
+pub const HTLC_DATA_CIPHER_ALG: u16 = 0x0ec2;
+
 pub const HTLS_DATA_USER_LIST: u16 = 0x12c; // 300
 pub const HTLS_DATA_FILE_LIST: u16 = 0xC8;  // 200
 pub const HTLS_DATA_CHAT: u16 = 0x65;       // 101
